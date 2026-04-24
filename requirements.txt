@@ -1,0 +1,10 @@
+streamlit==1.41.1
+pandas==2.3.3
+numpy==2.4.4
+scikit-learn==1.8.0
+joblib==1.4.2
+shap==0.51.0
+opencv-python-headless==4.13.0.92
+scikit-image==0.26.0
+Pillow==11.3.0
+matplotlib==3.10.8

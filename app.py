@@ -33,6 +33,42 @@ drawing_pca = joblib.load('models/drawing_pca.pkl')
 
 st.set_page_config(page_title="Parkinson's Screening Tool", layout="wide")
 
+with st.sidebar:
+    st.title("About")
+    
+    st.subheader("How It Works")
+    st.write(
+        "This tool combines two machine learning models to screen for Parkinson's disease risk. "
+        "Part 1 analyzes your self-reported symptoms through a questionnaire. "
+        "Part 2 analyzes a spiral drawing you upload. "
+        "The results are combined using late fusion logic."
+    )
+    
+    st.subheader("Model Performance")
+    st.write("**Clinical Model:**")
+    st.write("- Accuracy: 92.9%")
+    st.write("- ROC AUC: 0.956")
+    st.write("**Drawing Model:**")
+    st.write("- Accuracy: 89.7%")
+    st.write("- ROC AUC: 0.973")
+    
+    st.subheader("Datasets")
+    st.write(
+        "**Clinical data:** Rabie El Kharoua Parkinson's Disease Dataset (Kaggle) — "
+        "2,105 patients with 32 features. Note: this is a synthetic dataset."
+    )
+    st.write(
+        "**Drawing data:** Augmented Parkinson's Drawings (Kaggle) — "
+        "3,389 spiral and wave drawings from healthy and PD patients."
+    )
+    
+    st.subheader("Disclaimer")
+    st.caption(
+        "This is a screening tool for educational purposes only. "
+        "It is not a substitute for professional medical diagnosis. "
+        "Please consult a healthcare provider for proper evaluation."
+    )
+
 if 'clinical_prob' not in st.session_state:
     st.session_state.clinical_prob = None
 if 'drawing_prob' not in st.session_state:
@@ -50,7 +86,7 @@ age = st.slider("Age", min_value=50, max_value=89, value=65)
 
 # Lifestyle
 st.subheader("Lifestyle")
-diet_quality = st.slider("Diet Quality (0 = poor, 10 = excellent)", 0.0, 10.0, 5.0)
+diet_quality = st.slider("Diet Quality (0 = poor, 10 = excellent)", 0, 10, 5)
 sleep_disorders = st.radio("Do you have diagnosed sleep disorders?", ["No", "Yes"])
 
 # Medical History
@@ -139,11 +175,11 @@ if st.button("Predict Risk"):
     st.progress(float(probability))
     
     if probability < 0.35:
-        st.success(f"Low Risk — {probability*100:.1f}% probability")
+        st.success(f"Low Risk — {probability*100:.1f}% probability of PD")
     elif probability < 0.65:
-        st.warning(f"Moderate Risk — {probability*100:.1f}% probability")
+        st.warning(f"Moderate Risk — {probability*100:.1f}% probability of PD")
     else:
-        st.error(f"High Risk — {probability*100:.1f}% probability")
+        st.error(f"High Risk — {probability*100:.1f}% probability of PD")
     
 
     # SHAP explanation for this specific prediction
@@ -205,42 +241,43 @@ if uploaded_file is not None:
         # Predict
         drawing_prob = drawing_model.predict_proba(hog_pca)[0, 1]
         st.session_state.drawing_prob = drawing_prob
-        prediction = "Parkinson's" if drawing_prob >= 0.5 else "Healthy"
+        prediction = "Parkinson's" if drawing_prob >= 0.4 else "Healthy"
         
         # Display
         st.subheader("Drawing Analysis Result")
         if prediction == "Parkinson's":
-            st.error(f"Prediction: {prediction} — {drawing_prob*100:.1f}% confidence")
+            st.error(f"Prediction: {prediction} — {drawing_prob*100:.1f}% probability of PD")
         else:
             st.success(f"Prediction: {prediction} — {(1-drawing_prob)*100:.1f}% confidence")
 
 st.header("Combined Analysis")
 
 if st.session_state.clinical_prob is not None and st.session_state.drawing_prob is not None:
-    clinical_p = st.session_state.clinical_prob
-    drawing_p = st.session_state.drawing_prob
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Questionnaire Risk", f"{clinical_p*100:.1f}%")
-    with col2:
-        st.metric("Drawing Analysis Risk", f"{drawing_p*100:.1f}%")
-    
-    result = fuse_predictions(clinical_p, drawing_p)
-    
-    st.subheader("Combined Interpretation")
-    if "High Risk" in result:
-        st.error(result)
-    elif "Low Risk" in result:
-        st.success(result)
-    elif "Inconclusive" in result:
-        st.warning(result)
-    else:
-        st.info(result)
-    
-    st.caption(
-        "⚠️ This is a screening tool, not a medical diagnosis. "
-        "Please consult a healthcare professional for proper evaluation."
-    )
+    if st.button("Run Combined Analysis"):
+        clinical_p = st.session_state.clinical_prob
+        drawing_p = st.session_state.drawing_prob
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Questionnaire Risk", f"{clinical_p*100:.1f}%")
+        with col2:
+            st.metric("Drawing Analysis Risk", f"{drawing_p*100:.1f}%")
+        
+        result = fuse_predictions(clinical_p, drawing_p)
+        
+        st.subheader("Combined Interpretation")
+        if "High Risk" in result:
+            st.error(result)
+        elif "Low Risk" in result:
+            st.success(result)
+        elif "Mixed Signals" in result:
+            st.warning(result)
+        else:
+            st.info(result)
+        
+        st.caption(
+            "⚠️ This is a screening tool, not a medical diagnosis. "
+            "Please consult a healthcare professional for proper evaluation."
+        )
 else:
-    st.info("Complete both Part 1 and Part 2 to see combined results.")
+    st.info("Complete both Part 1 and Part 2 to run combined analysis.")
