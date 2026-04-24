@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 import joblib
 import shap
+import cv2
+from skimage.feature import hog
+from PIL import Image
 
 
 FEATURE_DISPLAY_NAMES = {
@@ -24,6 +27,8 @@ FEATURE_DISPLAY_NAMES = {
 clinical_model = joblib.load('models/clinical_model.pkl')
 clinical_scaler = joblib.load('models/clinical_scaler.pkl')
 selected_features = joblib.load('models/selected_features.pkl')
+drawing_model = joblib.load('models/drawing_model.pkl')
+drawing_pca = joblib.load('models/drawing_pca.pkl')
 
 st.set_page_config(page_title="Parkinson's Screening Tool", layout="wide")
 
@@ -155,10 +160,48 @@ if st.button("Predict Risk"):
         friendly_name = FEATURE_DISPLAY_NAMES.get(feat, feat)
         st.write(f"- **{friendly_name}** {direction} your risk")
 
-# Convert Yes/No to 1/0
-yes_no_map = {"Yes": 1, "No": 0}
+st.header("Part 2: Spiral Drawing Analysis")
+st.write(
+    "Draw a spiral or wave on a blank piece of paper, take a clear photo of it, "
+    "and upload below. For best results, ensure good lighting and the "
+    "spiral fills most of the frame."
+)
 
-# Proxy feature calculations
-updrs_score = updrs * 20  # map 0-10 slider to 0-200 scale
-functional_score = functional     # already matches
-moca_score = 30 - (yes_no_map[memory_issues] + yes_no_map[confusion] + yes_no_map[word_finding]) * 5
+uploaded_file = st.file_uploader(
+    "Upload your spiral drawing (JPG or PNG)",
+    type=['jpg', 'jpeg', 'png']
+)
+
+if uploaded_file is not None:
+    st.image(uploaded_file, caption="Your uploaded drawing", width=400)
+    
+    if st.button("Analyze Drawing"):
+    # Load image
+        image = Image.open(uploaded_file).convert('L')  # grayscale
+        img_array = np.array(image)
+        
+        # Resize to 128x128
+        img_resized = cv2.resize(img_array, (128, 128))
+        
+        # Extract HOG features
+        hog_features = hog(
+            img_resized,
+            orientations=9,
+            pixels_per_cell=(8, 8),
+            cells_per_block=(2, 2),
+            block_norm='L2-Hys'
+        )
+        
+        # Apply PCA
+        hog_pca = drawing_pca.transform([hog_features])
+        
+        # Predict
+        drawing_prob = drawing_model.predict_proba(hog_pca)[0, 1]
+        prediction = "Parkinson's" if drawing_prob >= 0.5 else "Healthy"
+        
+        # Display
+        st.subheader("Drawing Analysis Result")
+        if prediction == "Parkinson's":
+            st.error(f"Prediction: {prediction} — {drawing_prob*100:.1f}% confidence")
+        else:
+            st.success(f"Prediction: {prediction} — {(1-drawing_prob)*100:.1f}% confidence")
