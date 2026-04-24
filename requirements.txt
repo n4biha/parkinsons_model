@@ -8,3 +8,4 @@ opencv-python-headless==4.13.0.92
 scikit-image==0.26.0
 Pillow==11.3.0
 matplotlib==3.10.8
+plotly==5.24.1
