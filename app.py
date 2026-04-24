@@ -6,6 +6,7 @@ import shap
 import cv2
 from skimage.feature import hog
 from PIL import Image
+from fusion import fuse_predictions
 
 
 FEATURE_DISPLAY_NAMES = {
@@ -31,6 +32,11 @@ drawing_model = joblib.load('models/drawing_model.pkl')
 drawing_pca = joblib.load('models/drawing_pca.pkl')
 
 st.set_page_config(page_title="Parkinson's Screening Tool", layout="wide")
+
+if 'clinical_prob' not in st.session_state:
+    st.session_state.clinical_prob = None
+if 'drawing_prob' not in st.session_state:
+    st.session_state.drawing_prob = None
 
 st.title("Parkinson's Disease Screening Tool")
 st.markdown("*A two-part screening tool combining health questionnaire and spiral drawing analysis*")
@@ -126,6 +132,7 @@ if st.button("Predict Risk"):
     
     # Predict
     probability = clinical_model.predict_proba(selected)[0, 1]
+    st.session_state.clinical_prob = probability
     
     # Display
     st.subheader("Prediction Result")
@@ -197,6 +204,7 @@ if uploaded_file is not None:
         
         # Predict
         drawing_prob = drawing_model.predict_proba(hog_pca)[0, 1]
+        st.session_state.drawing_prob = drawing_prob
         prediction = "Parkinson's" if drawing_prob >= 0.5 else "Healthy"
         
         # Display
@@ -205,3 +213,34 @@ if uploaded_file is not None:
             st.error(f"Prediction: {prediction} — {drawing_prob*100:.1f}% confidence")
         else:
             st.success(f"Prediction: {prediction} — {(1-drawing_prob)*100:.1f}% confidence")
+
+st.header("Combined Analysis")
+
+if st.session_state.clinical_prob is not None and st.session_state.drawing_prob is not None:
+    clinical_p = st.session_state.clinical_prob
+    drawing_p = st.session_state.drawing_prob
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Questionnaire Risk", f"{clinical_p*100:.1f}%")
+    with col2:
+        st.metric("Drawing Analysis Risk", f"{drawing_p*100:.1f}%")
+    
+    result = fuse_predictions(clinical_p, drawing_p)
+    
+    st.subheader("Combined Interpretation")
+    if "High Risk" in result:
+        st.error(result)
+    elif "Low Risk" in result:
+        st.success(result)
+    elif "Inconclusive" in result:
+        st.warning(result)
+    else:
+        st.info(result)
+    
+    st.caption(
+        "⚠️ This is a screening tool, not a medical diagnosis. "
+        "Please consult a healthcare professional for proper evaluation."
+    )
+else:
+    st.info("Complete both Part 1 and Part 2 to see combined results.")
