@@ -3,10 +3,11 @@ import pandas as pd
 import numpy as np
 import joblib
 import shap
-import cv2
-from skimage.feature import hog
 from PIL import Image
 from fusion import fuse_predictions
+import torch
+import torch.nn as nn
+from torchvision import models, transforms
 
 
 FEATURE_DISPLAY_NAMES = {
@@ -25,11 +26,27 @@ FEATURE_DISPLAY_NAMES = {
     'SleepDisorders': 'Sleep disorders',
 }
 
+# Load clinical models
 clinical_model = joblib.load('models/clinical_model.pkl')
 clinical_scaler = joblib.load('models/clinical_scaler.pkl')
 selected_features = joblib.load('models/selected_features.pkl')
-drawing_model = joblib.load('models/drawing_model.pkl')
-drawing_pca = joblib.load('models/drawing_pca.pkl')
+
+# Load CNN drawing model
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+cnn_model = models.mobilenet_v2(weights=None)
+num_features = cnn_model.classifier[1].in_features
+cnn_model.classifier[1] = nn.Linear(num_features, 2)
+cnn_model.load_state_dict(torch.load('models/drawing_cnn.pth', map_location=device))
+cnn_model = cnn_model.to(device)
+cnn_model.eval()
+
+cnn_transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.Grayscale(num_output_channels=3),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], 
+                         std=[0.229, 0.224, 0.225])
+])
 
 st.set_page_config(page_title="Parkinson's Screening Tool", layout="wide")
 
@@ -42,7 +59,7 @@ with st.sidebar:
     st.write(
         "This tool combines two machine learning models to screen for Parkinson's disease risk. "
         "Part 1 analyzes your self-reported symptoms through a questionnaire. "
-        "Part 2 analyzes a spiral drawing you upload. "
+        "Part 2 analyzes a spiral drawing you upload using a CNN with transfer learning. "
         "The results are combined using late fusion logic."
     )
 
@@ -112,34 +129,22 @@ if page == 'Screening Tool':
     confusion = st.radio("Do you sometimes get confused or disoriented?", ["No", "Yes"])
     word_finding = st.radio("Do you have trouble finding the right words?", ["No", "Yes"])
 
-    # Predict button (no wiring yet)
+    # Predict button
     if st.button("Predict Risk"):
         yes_no_map = {"Yes": 1, "No": 0}
         
-        # Build input dict matching training column names
         input_data = {
-            'Age': age,
-            'Gender': 0,
-            'Ethnicity': 0,
-            'EducationLevel': 1,
-            'BMI': 27,
-            'Smoking': 0,
-            'AlcoholConsumption': 5,
-            'PhysicalActivity': 5,
-            'DietQuality': diet_quality,
-            'SleepQuality': 7,
+            'Age': age, 'Gender': 0, 'Ethnicity': 0, 'EducationLevel': 1,
+            'BMI': 27, 'Smoking': 0, 'AlcoholConsumption': 5, 'PhysicalActivity': 5,
+            'DietQuality': diet_quality, 'SleepQuality': 7,
             'FamilyHistoryParkinsons': 0,
             'TraumaticBrainInjury': yes_no_map[tbi],
             'Hypertension': 0,
             'Diabetes': yes_no_map[diabetes],
             'Depression': yes_no_map[depression],
-            'Stroke': 0,
-            'SystolicBP': 130,
-            'DiastolicBP': 80,
-            'CholesterolTotal': 200,
-            'CholesterolLDL': 100,
-            'CholesterolHDL': 50,
-            'CholesterolTriglycerides': 150,
+            'Stroke': 0, 'SystolicBP': 130, 'DiastolicBP': 80,
+            'CholesterolTotal': 200, 'CholesterolLDL': 100,
+            'CholesterolHDL': 50, 'CholesterolTriglycerides': 150,
             'UPDRS': updrs * 20,
             'MoCA': 30 - (yes_no_map[memory_issues] + yes_no_map[confusion] + yes_no_map[word_finding]) * 5,
             'FunctionalAssessment': functional,
@@ -152,21 +157,14 @@ if page == 'Screening Tool':
             'Constipation': 0,
         }
         
-        # Convert to DataFrame
         df_input = pd.DataFrame([input_data])
-        
-        # Scale
         scaled = clinical_scaler.transform(df_input)
-        
-        # Select features
         feature_indices = [list(df_input.columns).index(f) for f in selected_features]
         selected = scaled[:, feature_indices]
         
-        # Predict
         probability = clinical_model.predict_proba(selected)[0, 1]
         st.session_state.clinical_prob = probability
         
-        # Display
         st.subheader("Prediction Result")
         st.progress(float(probability))
         
@@ -177,22 +175,14 @@ if page == 'Screening Tool':
         else:
             st.error(f"High Risk — {probability*100:.1f}% probability of PD")
         
-
-        # SHAP explanation for this specific prediction
+        # SHAP explanation
         st.subheader("What's driving this prediction?")
-        
         explainer = shap.TreeExplainer(clinical_model)
         shap_values = explainer.shap_values(selected)
-        
-        # Get SHAP values for class 1 (PD) for this single prediction
         shap_vals = shap_values[0, :, 1]
-        
-        # Pair with feature names and sort by absolute impact
         feature_impact = list(zip(selected_features, shap_vals))
         feature_impact.sort(key=lambda x: abs(x[1]), reverse=True)
         
-        # Display top 3
-        #POTENTIALLY REMOVE
         st.write("The top 3 factors influencing your score:")
         for feat, val in feature_impact[:3]:
             direction = "increased" if val > 0 else "decreased"
@@ -215,31 +205,20 @@ if page == 'Screening Tool':
         st.image(uploaded_file, caption="Your uploaded drawing", width=400)
         
         if st.button("Analyze Drawing"):
-        # Load image
-            image = Image.open(uploaded_file).convert('L')  # grayscale
-            img_array = np.array(image)
+            image = Image.open(uploaded_file).convert('L')
             
-            # Resize to 128x128
-            img_resized = cv2.resize(img_array, (128, 128))
-            
-            # Extract HOG features
-            hog_features = hog(
-                img_resized,
-                orientations=9,
-                pixels_per_cell=(8, 8),
-                cells_per_block=(2, 2),
-                block_norm='L2-Hys'
-            )
-            
-            # Apply PCA
-            hog_pca = drawing_pca.transform([hog_features])
+            # Apply CNN transforms
+            img_tensor = cnn_transform(image).unsqueeze(0).to(device)
             
             # Predict
-            drawing_prob = drawing_model.predict_proba(hog_pca)[0, 1]
-            st.session_state.drawing_prob = drawing_prob
-            prediction = "Parkinson's" if drawing_prob >= 0.4 else "Healthy"
+            with torch.no_grad():
+                outputs = cnn_model(img_tensor)
+                probs = torch.softmax(outputs, dim=1)[0]
+                drawing_prob = probs[1].item()
             
-            # Display
+            prediction = "Parkinson's" if drawing_prob >= 0.5 else "Healthy"
+            st.session_state.drawing_prob = drawing_prob
+            
             st.subheader("Drawing Analysis Result")
             if prediction == "Parkinson's":
                 st.error(f"Prediction: {prediction} — {drawing_prob*100:.1f}% probability of PD")
@@ -285,7 +264,6 @@ if page == "Dashboard":
     st.title("Model Performance Dashboard")
     st.caption("Comprehensive evaluation of clinical and drawing-based classifiers")
     
-    # Load all data
     class_dist = pd.read_csv('models/class_distribution.csv')
     feature_importance = pd.read_csv('models/feature_importance.csv')
     roc_clinical = pd.read_csv('models/roc_clinical.csv')
@@ -294,18 +272,16 @@ if page == "Dashboard":
     cm_drawing = pd.read_csv('models/confusion_matrix_drawing.csv', index_col=0)
     model_comparison = pd.read_csv('models/model_comparison.csv')
     
-    # ── KPI Cards ──────────────────────────────────
     st.subheader("Key Metrics")
     kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
     kpi1.metric("Total Patients", f"{class_dist['Count'].sum():,}")
     kpi2.metric("Clinical Accuracy", "92.9%")
     kpi3.metric("Clinical ROC AUC", "0.956")
-    kpi4.metric("Drawing Accuracy", '89.7%')
-    kpi5.metric("Drawing ROC AUC", "0.973")
+    kpi4.metric("Drawing Accuracy", '97.3%')
+    kpi5.metric("Drawing ROC AUC", "0.995")
     
     st.divider()
     
-    # ── Row 1: Class distribution + Feature importance ──
     col1, col2 = st.columns(2)
     
     with col1:
@@ -328,14 +304,13 @@ if page == "Dashboard":
     
     st.divider()
     
-    # ── Row 2: ROC curves side by side ──
     st.subheader("ROC Curves — Model Comparison")
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=roc_clinical['FPR'], y=roc_clinical['TPR'],
                              mode='lines', name='Clinical Model (AUC = 0.956)',
                              line=dict(color='#2E86AB', width=3)))
     fig.add_trace(go.Scatter(x=roc_drawing['FPR'], y=roc_drawing['TPR'],
-                             mode='lines', name='Drawing Model (AUC = 0.973)',
+                             mode='lines', name='Drawing Model (AUC = 0.995)',
                              line=dict(color='#A23B72', width=3)))
     fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1],
                              mode='lines', name='Random Chance',
@@ -347,7 +322,6 @@ if page == "Dashboard":
     
     st.divider()
     
-    # ── Row 3: Confusion matrices side by side ──
     col3, col4 = st.columns(2)
     
     with col3:
@@ -362,7 +336,7 @@ if page == "Dashboard":
         st.plotly_chart(fig, use_container_width=True)
     
     with col4:
-        st.subheader("Confusion Matrix — Drawing")
+        st.subheader("Confusion Matrix — Drawing (CNN)")
         fig = px.imshow(cm_drawing.values,
                         labels=dict(x="Predicted", y="Actual", color="Count"),
                         x=['Healthy', 'PD'],
@@ -374,6 +348,9 @@ if page == "Dashboard":
     
     st.divider()
     
-    # ── Row 4: Model comparison table ──
-    st.subheader("Logistic Regression vs Random Forest")
+    st.subheader("Logistic Regression vs Random Forest (Clinical)")
     st.dataframe(model_comparison, use_container_width=True, hide_index=True)
+
+    st.subheader("XGBoost vs CNN (Drawing)")
+    drawing_comparison = pd.read_csv('models/drawing_comparison.csv')
+    st.dataframe(drawing_comparison, use_container_width=True, hide_index=True)
