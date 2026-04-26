@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 import json
+import google.generativeai as genai
 
 
 FEATURE_DISPLAY_NAMES = {
@@ -51,6 +52,9 @@ cnn_transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], 
                          std=[0.229, 0.224, 0.225])
 ])
+# Configure Gemini for explanations
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+gemini_model = genai.GenerativeModel('gemini-2.5-flash')
 
 st.set_page_config(page_title="Parkinson's Screening Tool", layout="wide")
 
@@ -89,7 +93,56 @@ if 'clinical_prob' not in st.session_state:
     st.session_state.clinical_prob = None
 if 'drawing_prob' not in st.session_state:
     st.session_state.drawing_prob = None
+if 'top_features' not in st.session_state:
+    st.session_state.top_features = None
 
+def generate_explanation(clinical_prob, top_features, drawing_prob=None):
+    """Generate a personalized explanation using Gemini."""
+    
+    feature_text = "\n".join([f"- {feat}: {direction}" for feat, direction in top_features])
+    
+    drawing_text = ""
+    if drawing_prob is not None:
+        drawing_text = f"\nThe spiral drawing analysis returned a {drawing_prob*100:.1f}% probability of PD-related patterns."
+    
+    prompt = f"""You are a knowledgeable health educator explaining Parkinson's disease screening results to someone who may know little about the condition. 
+Do NOT provide medical diagnosis. Be educational, accessible, and supportive.
+
+The user's questionnaire result: {clinical_prob*100:.1f}% probability of PD risk indicators.
+{drawing_text}
+
+The top factors driving this result were:
+{feature_text}
+
+Write a thorough explanation (about 350-400 words, organized in 4 short paragraphs) that includes:
+
+**Paragraph 1 — What is Parkinson's disease?**
+Briefly explain Parkinson's disease in plain language for someone unfamiliar with it. Cover what it is (a brain condition affecting movement and other functions), what causes it (loss of dopamine-producing brain cells), and common early signs (tremor, slowness, balance issues, sleep problems). Keep it accessible — no jargon.
+
+**Paragraph 2 — What this result means:** 
+Explain what the user's specific probability score indicates. Be clear that this is a screening tool measuring patterns associated with PD, not a diagnosis. Explain that the model considers many factors together. Mention that the spiral drawing analysis (if included) looks for fine motor control patterns that can be affected by PD.
+
+**Paragraph 3 — Why these factors matter:**
+For each of the top 3 factors, explain in 1-2 sentences:
+- What that symptom or factor represents
+- Why scientists/doctors associate it with Parkinson's risk
+- How it relates to the underlying biology of PD when relevant
+Use accessible language and connect the dots between factors when possible.
+
+**Paragraph 4 — What to do next:**
+Provide thoughtful guidance based on the probability level:
+- For low risk: Reassurance, healthy habits to maintain (exercise, sleep, diet quality matter for brain health)
+- For moderate risk: Suggest tracking symptoms over time, consider a baseline conversation with a primary care doctor
+- For high risk or mixed signals: Recommend speaking with a neurologist for proper evaluation
+End with a reminder this is screening only, and that early conversations with healthcare providers are valuable regardless of result.
+
+Tone: warm, educational, empowering. Treat the reader like an intelligent adult who deserves to understand their health information and potentially can be unfamiliar with parkinson's so make sure to be clear and direct with findings."""
+    
+    try:
+        response = gemini_model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Unable to generate explanation: {str(e)}"
 
 if page == 'Screening Tool':
     st.title("Parkinson's Disease Screening Tool")
@@ -187,6 +240,7 @@ if page == 'Screening Tool':
         shap_vals = shap_values[0, :, 1]
         feature_impact = list(zip(selected_features, shap_vals))
         feature_impact.sort(key=lambda x: abs(x[1]), reverse=True)
+        st.session_state.top_features = feature_impact[:3]
         
         st.write("The top 3 factors influencing your score:")
         for feat, val in feature_impact[:3]:
@@ -260,6 +314,18 @@ if page == 'Screening Tool':
                 "⚠️ This is a screening tool, not a medical diagnosis. "
                 "Please consult a healthcare professional for proper evaluation."
             )
+
+            if st.session_state.top_features is not None:
+                top_features_for_ai = [
+                    (FEATURE_DISPLAY_NAMES.get(feat, feat), "increased your risk" if val > 0 else "decreased your risk")
+                    for feat, val in st.session_state.top_features
+                ]
+
+                with st.spinner("Generating personalized explanation..."):
+                    explanation = generate_explanation(clinical_p, top_features_for_ai, drawing_prob=drawing_p)
+
+                st.markdown("### Personalized Summary")
+                st.info(explanation)
     else:
         st.info("Complete both Part 1 and Part 2 to run combined analysis.")
 
