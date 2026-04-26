@@ -8,6 +8,7 @@ from fusion import fuse_predictions
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
+import json
 
 
 FEATURE_DISPLAY_NAMES = {
@@ -35,8 +36,11 @@ selected_features = joblib.load('models/selected_features.pkl')
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 cnn_model = models.mobilenet_v2(weights=None)
 num_features = cnn_model.classifier[1].in_features
-cnn_model.classifier[1] = nn.Linear(num_features, 2)
-cnn_model.load_state_dict(torch.load('models/drawing_cnn.pth', map_location=device))
+cnn_model.classifier = nn.Sequential(
+    nn.Dropout(p=0.4),
+    nn.Linear(num_features, 2)
+)
+cnn_model.load_state_dict(torch.load('models/drawing_cnn_final.pth', map_location=device))
 cnn_model = cnn_model.to(device)
 cnn_model.eval()
 
@@ -69,9 +73,10 @@ with st.sidebar:
         "2,105 patients with 32 features. Note: this is a synthetic dataset."
     )
     st.write(
-        "**Drawing data:** Augmented Parkinson's Drawings (Kaggle) — "
-        "3,389 spiral and wave drawings from healthy and PD patients."
-    )
+        "**Drawing data:** Original Parkinson's Drawings (Kaggle, kmader) — "
+        "102 spiral drawings from 51 healthy and 51 PD patients. "
+        "Models evaluated using 5-fold cross-validation."
+    )   
     
     st.subheader("Disclaimer")
     st.caption(
@@ -191,7 +196,7 @@ if page == 'Screening Tool':
 
     st.header("Part 2: Spiral Drawing Analysis")
     st.write(
-        "Draw a spiral or wave on a blank piece of paper, take a clear photo of it, "
+        "Draw a spiral on a blank piece of paper, take a clear photo of it, "
         "and upload below. For best results, ensure good lighting and the "
         "spiral fills most of the frame."
     )
@@ -211,6 +216,7 @@ if page == 'Screening Tool':
             img_tensor = cnn_transform(image).unsqueeze(0).to(device)
             
             # Predict
+
             with torch.no_grad():
                 outputs = cnn_model(img_tensor)
                 probs = torch.softmax(outputs, dim=1)[0]
@@ -274,11 +280,11 @@ if page == "Dashboard":
     
     st.subheader("Key Metrics")
     kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
-    kpi1.metric("Total Patients", f"{class_dist['Count'].sum():,}")
+    kpi1.metric("Total Patients (Clinical)", f"{class_dist['Count'].sum():,}")
     kpi2.metric("Clinical Accuracy", "92.9%")
     kpi3.metric("Clinical ROC AUC", "0.956")
-    kpi4.metric("Drawing Accuracy", '97.3%')
-    kpi5.metric("Drawing ROC AUC", "0.995")
+    kpi4.metric("Drawing Accuracy", '92.1%')
+    kpi5.metric("Drawing ROC AUC", "0.944")
     
     st.divider()
     
@@ -307,14 +313,14 @@ if page == "Dashboard":
     st.subheader("ROC Curves — Model Comparison")
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=roc_clinical['FPR'], y=roc_clinical['TPR'],
-                             mode='lines', name='Clinical Model (AUC = 0.956)',
-                             line=dict(color='#2E86AB', width=3)))
+                         mode='lines', name='Clinical Model (AUC = 0.956)',
+                         line=dict(color='#2E86AB', width=3)))
     fig.add_trace(go.Scatter(x=roc_drawing['FPR'], y=roc_drawing['TPR'],
-                             mode='lines', name='Drawing Model (AUC = 0.995)',
-                             line=dict(color='#A23B72', width=3)))
+                         mode='lines', name='Drawing Model (AUC = 0.944)',
+                         line=dict(color='#A23B72', width=3)))
     fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1],
-                             mode='lines', name='Random Chance',
-                             line=dict(color='gray', width=2, dash='dash')))
+                            mode='lines', name='Random Chance',
+                            line=dict(color='gray', width=2, dash='dash')))
     fig.update_layout(xaxis_title='False Positive Rate',
                       yaxis_title='True Positive Rate',
                       height=450)
@@ -351,6 +357,28 @@ if page == "Dashboard":
     st.subheader("Logistic Regression vs Random Forest (Clinical)")
     st.dataframe(model_comparison, use_container_width=True, hide_index=True)
 
-    st.subheader("XGBoost vs CNN (Drawing)")
-    drawing_comparison = pd.read_csv('models/drawing_comparison.csv')
-    st.dataframe(drawing_comparison, use_container_width=True, hide_index=True)
+    st.subheader("Drawing Model — Cross-Validation Performance")
+
+    with open('models/cv_results.json', 'r') as f:
+        cv = json.load(f)
+
+    # CV bar chart
+    fold_df = pd.DataFrame({
+        'Fold': [f'Fold {i+1}' for i in range(5)],
+        'Accuracy': cv['fold_accuracies']
+    })
+
+    fig = px.bar(fold_df, x='Fold', y='Accuracy',
+                color='Accuracy',
+                color_continuous_scale='Purples',
+                text='Accuracy')
+    fig.update_layout(
+        height=400,
+        yaxis_range=[80, 100],
+        showlegend=False
+    )
+    fig.add_hline(y=cv['mean_accuracy'], line_dash="dash", line_color="white",
+                annotation_text=f"Mean: {cv['mean_accuracy']}%")
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.caption(f"5-fold cross-validation on 102 spiral drawings. Mean: {cv['mean_accuracy']}% ± {cv['std_accuracy']}%")
