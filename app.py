@@ -349,8 +349,8 @@ if page == "Dashboard":
     kpi1.metric("Total Patients (Clinical)", f"{class_dist['Count'].sum():,}")
     kpi2.metric("Clinical Accuracy", "92.9%")
     kpi3.metric("Clinical ROC AUC", "0.956")
-    kpi4.metric("Drawing Accuracy", '92.1%')
-    kpi5.metric("Drawing ROC AUC", "0.944")
+    kpi4.metric("Drawing Accuracy", '82.2%')
+    kpi5.metric("Drawing ROC AUC", "0.911")
     
     st.divider()
     
@@ -382,8 +382,8 @@ if page == "Dashboard":
                          mode='lines', name='Clinical Model (AUC = 0.956)',
                          line=dict(color='#2E86AB', width=3)))
     fig.add_trace(go.Scatter(x=roc_drawing['FPR'], y=roc_drawing['TPR'],
-                         mode='lines', name='Drawing Model (AUC = 0.944)',
-                         line=dict(color='#A23B72', width=3)))
+                     mode='lines', name='Drawing Model (AUC = 0.911)',
+                     line=dict(color='#A23B72', width=3)))
     fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1],
                             mode='lines', name='Random Chance',
                             line=dict(color='gray', width=2, dash='dash')))
@@ -440,11 +440,15 @@ if page == "Dashboard":
                 text='Accuracy')
     fig.update_layout(
         height=400,
-        yaxis_range=[80, 100],
+        yaxis_range=[60, 100],
         showlegend=False
     )
     fig.add_hline(y=cv['mean_accuracy'], line_dash="dash", line_color="white",
                 annotation_text=f"Mean: {cv['mean_accuracy']}%")
     st.plotly_chart(fig, use_container_width=True)
 
-    st.caption(f"5-fold cross-validation on 102 spiral drawings. Mean: {cv['mean_accuracy']}% ± {cv['std_accuracy']}%")
+    st.caption(
+    f"5-fold cross-validation on 102 spiral drawings (patient-level splits). "
+    f"Mean: {cv['mean_accuracy']}% ± {cv['std_accuracy']}% | "
+    f"ROC AUC: {cv['roc_auc']} | Precision: {cv['mean_precision']} | Recall: {cv['mean_recall']}"
+)
