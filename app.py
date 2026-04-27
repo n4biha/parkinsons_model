@@ -260,11 +260,29 @@ if page == 'Screening Tool':
         type=['jpg', 'jpeg', 'png']
     )
 
-    if uploaded_file is not None:
-        st.image(uploaded_file, caption="Your uploaded drawing", width=400)
-        
+    st.markdown("**Don't have a spiral handy? Try one of these examples:**")
+
+    sample_col1, sample_col2 = st.columns(2)
+
+    with sample_col1:
+        if st.button("Try Healthy Example", use_container_width=True):
+            st.session_state.sample_image = "samples/example_healthy.png"
+
+    with sample_col2:
+        if st.button("Try Parkinson's Example", use_container_width=True):
+            st.session_state.sample_image = "samples/example_parkinson.png"
+
+    # Use either uploaded file OR sample
+    if 'sample_image' not in st.session_state:
+        st.session_state.sample_image = None
+
+    active_image = uploaded_file if uploaded_file else st.session_state.sample_image
+
+    if active_image is not None:
+        st.image(active_image, caption="Drawing for analysis", width=400)
+            
         if st.button("Analyze Drawing"):
-            image = Image.open(uploaded_file).convert('L')
+            image = Image.open(active_image).convert('L')
             
             # Apply CNN transforms
             img_tensor = cnn_transform(image).unsqueeze(0).to(device)
